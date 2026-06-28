@@ -1,0 +1,76 @@
+# =============================================================================
+# KAFKA su Kubernetes (Passo 8 — light)
+# Versione single-node in modalità KRaft (Kafka 3.x non ha più bisogno di
+# Zookeeper: fa da solo anche da "controller"). Perfetta per imparare:
+# un solo pod che è insieme broker e controller.
+#
+# Qui dentro ci sono DUE risorse (separate da "---"):
+#   1) Service  -> dà a Kafka un NOME DNS stabile ("kafka") dentro il cluster,
+#                  così il producer la trova senza sapere l'IP del pod.
+#   2) Deployment -> crea e mantiene vivo il pod di Kafka (lo riavvia se cade).
+# =============================================================================
+
+# --- 1) SERVICE: il "centralino" DNS di Kafka -------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka            # <-- questo nome diventa l'hostname: kafka:9092
+  namespace: crypto
+spec:
+  # ClusterIP = raggiungibile SOLO dall'interno del cluster (ci basta).
+  selector:
+    app: kafka           # instrada verso i pod con questa label
+  ports:
+    - name: plaintext
+      port: 9092
+      targetPort: 9092
+---
+# --- 2) DEPLOYMENT: il pod di Kafka -----------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: crypto
+spec:
+  replicas: 1            # single-node: una sola copia
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka       # <-- deve combaciare col selector del Service sopra
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.7.0   # immagine ufficiale, supporta KRaft
+          ports:
+            - containerPort: 9092
+          env:
+            # --- Configurazione KRaft single-node (broker + controller) ---
+            - { name: KAFKA_NODE_ID,            value: "1" }
+            - { name: KAFKA_PROCESS_ROLES,      value: "broker,controller" }
+            - { name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@localhost:9093" }
+            # Ascolta su 9092 (client) e 9093 (controller interno)
+            - { name: KAFKA_LISTENERS,          value: "PLAINTEXT://:9092,CONTROLLER://:9093" }
+            # Si "annuncia" ai client come kafka:9092 = il nome del Service.
+            # Così il producer che si collega a kafka:9092 viene indirizzato qui.
+            - { name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092" }
+            - { name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT" }
+            - { name: KAFKA_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER" }
+            - { name: KAFKA_INTER_BROKER_LISTENER_NAME, value: "PLAINTEXT" }
+            # Replica = 1 ovunque: abbiamo un solo nodo.
+            - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
+            - { name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0" }
+            - { name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "true" }
+          # readinessProbe: il pod è "pronto" (e il Service inizia a mandargli
+          # traffico) solo quando la porta 9092 risponde davvero.
+          readinessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits:   { memory: "1Gi" }

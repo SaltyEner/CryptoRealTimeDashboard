@@ -1,0 +1,53 @@
+# =============================================================================
+# PRODUCER su Kubernetes (Passo 8 — light)
+# Riusa la STESSA immagine Docker che abbiamo già costruito per Compose
+# (progetto3-producer). Qui mostriamo due risorse:
+#   1) ConfigMap -> la configurazione (broker, topic, simboli) TENUTA FUORI
+#                   dal codice e dall'immagine: si cambia senza ricostruire.
+#   2) Deployment -> il pod del producer, che legge la ConfigMap e si collega
+#                    a Kafka tramite il nome di Service "kafka:9092".
+# =============================================================================
+
+# --- 1) CONFIGMAP: la configurazione, separata dal codice -------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: producer-config
+  namespace: crypto
+data:
+  # Dentro il cluster Kafka si raggiunge col nome del suo Service.
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_TOPIC: "crypto-prices"
+  SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT"
+  POLL_INTERVAL_SECONDS: "2"
+---
+# --- 2) DEPLOYMENT: il pod del producer -------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: producer
+  namespace: crypto
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: producer
+  template:
+    metadata:
+      labels:
+        app: producer
+    spec:
+      containers:
+        - name: producer
+          # Immagine LOCALE (costruita da noi). In minikube non si scarica da
+          # internet: la carichiamo nel cluster con "minikube image load".
+          image: progetto3-producer:latest
+          imagePullPolicy: Never   # <-- usa SOLO l'immagine locale, non prova a scaricarla
+          # envFrom: inietta TUTTE le chiavi della ConfigMap come variabili
+          # d'ambiente del container (KAFKA_BOOTSTRAP_SERVERS, SYMBOLS, ...).
+          envFrom:
+            - configMapRef:
+                name: producer-config
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { memory: "256Mi" }

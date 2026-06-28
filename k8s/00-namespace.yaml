@@ -1,0 +1,12 @@
+# =============================================================================
+# Namespace (Passo 8 — Kubernetes "light")
+# Un namespace è una "cartella logica" dentro il cluster: tiene insieme e
+# isola le risorse di questo progetto, così non si mescolano con altro.
+# Tutti i manifest successivi vivono dentro "crypto".
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crypto
+  labels:
+    app.kubernetes.io/part-of: crypto-pipeline

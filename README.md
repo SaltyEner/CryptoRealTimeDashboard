@@ -7,8 +7,7 @@ interamente containerizzato e avviabile con **un solo comando**.
 
 > **Stack:** Python · Apache Kafka · Spark Structured Streaming · PostgreSQL · S3 (MinIO) · Apache Airflow · Streamlit · Docker
 
-<!-- Sostituisci con una GIF reale della dashboard in funzione (vedi sezione "Demo"). -->
-<!-- ![Demo](docs/demo.gif) -->
+![Demo della dashboard real-time](docs/demo.gif)
 
 ---
 
