@@ -1,0 +1,7 @@
+# Dipendenze della dashboard (Passo 6)
+streamlit>=1.37,<2
+pandas>=2.0
+sqlalchemy>=2.0          # per pandas.read_sql con engine
+psycopg2-binary>=2.9     # driver PostgreSQL (wheel, niente compilazione)
+streamlit-autorefresh>=1.0  # refresh automatico per dati "live"
+plotly>=5.22                # grafici interattivi (area + candlestick)

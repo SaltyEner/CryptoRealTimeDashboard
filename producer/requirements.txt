@@ -1,0 +1,8 @@
+# Dipendenze del producer (Passo 2)
+# kafka-python: client Kafka in pura Python (nessuna compilazione su Windows).
+#   Serve >=2.1 per compatibilità con Python 3.12.
+kafka-python>=2.1.0
+# requests: per chiamare l'API REST di Binance.
+requests>=2.31.0
+# python-dotenv: per leggere il file .env con la configurazione.
+python-dotenv>=1.0.0

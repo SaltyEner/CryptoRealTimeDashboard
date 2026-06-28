@@ -1,0 +1,5 @@
+# Non serve copiare questi file dentro l'immagine del producer.
+__pycache__/
+*.pyc
+test_consumer.py
+.env

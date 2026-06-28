@@ -1,0 +1,17 @@
+# Tema della dashboard (Passo 6+) — palette scura coordinata coi grafici Plotly.
+# Streamlit applica automaticamente questi colori a tutta la UI.
+[theme]
+base = "dark"
+primaryColor = "#00d09c"            # verde acqua: accento di brand (slider, link, focus)
+backgroundColor = "#0e1117"         # sfondo principale
+secondaryBackgroundColor = "#161b22" # sidebar e "card" delle metriche
+textColor = "#e6edf3"
+font = "sans serif"
+
+[server]
+# Avvio pulito e non interattivo nel container.
+headless = true
+
+[browser]
+# Niente telemetria di utilizzo.
+gatherUsageStats = false

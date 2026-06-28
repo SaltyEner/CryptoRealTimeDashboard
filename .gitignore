@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Variabili d'ambiente e segreti (MAI committare credenziali!)
+.env
+*.pem
+*.key
+
+# Dati locali / output
+data/
+*.parquet
+*.log
+
+# AWS
+.aws/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Spark / checkpoint
+spark-warehouse/
+checkpoint/
+
+# Airflow (i log dei task sono rumorosi e locali)
+airflow/logs/*
+!airflow/logs/.gitkeep

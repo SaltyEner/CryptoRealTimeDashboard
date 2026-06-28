@@ -1,0 +1,322 @@
+# =============================================================================
+# docker-compose.yml — PASSO 1: Kafka + Zookeeper
+# =============================================================================
+# In questo file definiamo i "servizi" (container) della nostra pipeline.
+# Per ora SOLO Zookeeper e Kafka. Aggiungeremo Spark, Postgres, Airflow,
+# Streamlit nei passi successivi, un pezzo alla volta.
+# =============================================================================
+
+# Config condivisa dai servizi Airflow (Passo 4). L'anchor &airflow-common
+# evita di ripetere image/environment/volumes in ogni servizio.
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__WEBSERVER__SECRET_KEY: 'progetto3-secret-key'
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # ZOOKEEPER
+  # Ruolo: il "registro/coordinatore" di Kafka. Tiene traccia dei broker vivi,
+  # di chi è il leader delle partizioni, della configurazione del cluster.
+  # Kafka (in questa versione classica) non parte senza di lui.
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181   # porta su cui Kafka contatta Zookeeper
+      ZOOKEEPER_TICK_TIME: 2000     # "battito" interno in ms (heartbeat base)
+      # ZooKeeper recente abilita di default solo "srvr". Sblocchiamo "ruok"
+      # (risponde "imok" se è sano) per usarlo nell'healthcheck qui sotto.
+      KAFKA_OPTS: "-Dzookeeper.4lw.commands.whitelist=ruok,srvr,mntr,conf"
+    ports:
+      - "2181:2181"                 # esposta sull'host per eventuale debug
+    volumes:
+      # Persistiamo lo stato di Zookeeper così non si perde su down + recreate.
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      # Controlliamo che Zookeeper risponda "imok" sulla porta 2181
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # KAFKA (broker)
+  # Ruolo: il "tubo/serbatoio" di messaggi. I producer ci scrivono dati,
+  # i consumer li leggono. Disaccoppia chi produce da chi consuma.
+  #
+  # Concetto chiave dei LISTENER (la parte che confonde tutti all'inizio):
+  #   - Dentro la rete Docker i container si parlano col nome "kafka:29092".
+  #   - Dal TUO PC (host) ti colleghi con "localhost:9092".
+  # Per questo dichiariamo DUE listener distinti.
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy   # Kafka parte solo dopo che ZK è sano
+    ports:
+      - "9092:9092"                  # porta per connetterti DAL TUO PC
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+
+      # Due listener: uno interno (rete docker), uno per l'host
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_LISTENERS: "INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:29092,EXTERNAL://localhost:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+
+      # Con un solo broker il fattore di replica DEVE essere 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"   # crea i topic al volo (comodo in dev)
+    volumes:
+      # Log/segmenti dei messaggi su volume nominato: i dati sopravvivono a
+      # "docker compose down" e al ricreare il container (niente reprocessing).
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Il broker è "sano" se riusciamo a elencare i topic
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # KAFKA-UI (opzionale ma utilissimo)
+  # Una dashboard web per VEDERE topic e messaggi col browser su localhost:8080.
+  # Ti aiuta a capire cosa succede dentro Kafka senza comandi a memoria.
+  # ---------------------------------------------------------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "local"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:29092"
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+  # ---------------------------------------------------------------------------
+  # PRODUCER (Passo 7) — la sorgente dati, ora containerizzata.
+  # Legge Binance e pubblica sul topic crypto-prices. Dentro Docker si collega
+  # al listener INTERNO di Kafka (kafka:29092), non a localhost:9092.
+  # Parte solo quando Kafka è "healthy"; si riavvia da solo se cade.
+  # ---------------------------------------------------------------------------
+  producer:
+    build: ./producer
+    container_name: producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      KAFKA_TOPIC: "crypto-prices"
+      SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT"
+      POLL_INTERVAL_SECONDS: "2"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # POSTGRESQL (Passo 3)
+  # Ruolo: database relazionale dove Spark scrive i risultati. Veloce da
+  # interrogare per la dashboard. Al primo avvio esegue postgres/init.sql.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+      POSTGRES_DB: crypto
+    ports:
+      - "5432:5432"                # esposto sull'host (per ispezionarlo)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d crypto"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # SPARK (Passo 3)
+  # Ruolo: motore di stream processing. Esegue il nostro streaming_job.py che
+  # legge da Kafka, aggrega e scrive su PostgreSQL.
+  # - --packages scarica al volo il connettore Kafka e il driver JDBC Postgres.
+  # - spark.jars.ivy=/tmp/.ivy2: cartella scrivibile per la cache dei pacchetti.
+  # ---------------------------------------------------------------------------
+  spark:
+    image: apache/spark:3.5.1
+    container_name: spark
+    user: "0:0"                  # root: può scrivere il volume nominato del checkpoint
+    environment:
+      S3_ENDPOINT: "http://minio:9000"
+      S3_ACCESS_KEY: "minioadmin"
+      S3_SECRET_KEY: "minioadmin"
+      S3_BUCKET: "crypto-lake"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./spark:/opt/spark-app:ro              # il nostro codice
+      - spark-checkpoint:/tmp/checkpoint       # checkpoint PERSISTENTE (volume nominato, veloce)
+      - spark-ivy:/tmp/.ivy2                   # cache pacchetti: scaricati una volta sola
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - "local[4]"
+      - --packages
+      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262"
+      - --conf
+      - "spark.jars.ivy=/tmp/.ivy2"
+      - /opt/spark-app/streaming_job.py
+
+  # ---------------------------------------------------------------------------
+  # DASHBOARD (Passo 6) — Streamlit, legge da PostgreSQL
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: crypto
+      PGUSER: pipeline
+      PGPASSWORD: pipeline
+    ports:
+      - "8501:8501"             # UI su http://localhost:8501
+
+  # ---------------------------------------------------------------------------
+  # MINIO (Passo 5) — data lake S3-compatibile (locale, gratis)
+  # API S3 su :9000, console web su :9001. Spark ci scrive Parquet via s3a://.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-09-22T00-33-43Z
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"     # API S3
+      - "9001:9001"     # console web (browser)
+    volumes:
+      - minio-data:/data
+
+  # Crea il bucket "crypto-lake" al primo avvio, poi esce.
+  minio-init:
+    image: minio/mc:RELEASE.2024-09-16T17-43-14Z
+    container_name: minio-init
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do
+          echo 'attendo MinIO...'; sleep 2;
+        done;
+        mc mb --ignore-existing local/crypto-lake;
+        echo 'Bucket crypto-lake pronto.';
+
+  # ---------------------------------------------------------------------------
+  # AIRFLOW (Passo 4) — orchestrazione
+  # 4 servizi: metadata DB dedicato, init (una tantum), webserver, scheduler.
+  # ---------------------------------------------------------------------------
+
+  # Database dei metadati di Airflow (separato da quello della pipeline)
+  airflow-postgres:
+    image: postgres:16
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Inizializzazione: migra lo schema del DB e crea l'utente admin. Esce e basta.
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - >
+        airflow db migrate &&
+        airflow users create --role Admin --username admin --password admin
+        --firstname Admin --lastname User --email admin@example.com || true
+
+  # Interfaccia web di Airflow (UI) su http://localhost:8081
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8081:8080"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # Scheduler: legge i DAG e lancia i task all'orario previsto
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+# Volumi nominati: sopravvivono a "docker compose down" (i dati restano).
+volumes:
+  pgdata:
+  airflow-pgdata:
+  minio-data:
+  spark-checkpoint:
+  spark-ivy:
+  kafka-data:         # messaggi/segmenti di Kafka (durabilità)
+  zookeeper-data:     # snapshot di Zookeeper
+  zookeeper-log:      # transaction log di Zookeeper
+
+# Nota: non definiamo una rete custom; compose ne crea una di default e tutti
+# i servizi qui dentro si vedono per nome (zookeeper, kafka, postgres, ...).
