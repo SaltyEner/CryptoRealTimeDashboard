@@ -11,6 +11,9 @@ env/
 *.pem
 *.key
 
+# Note personali di studio (NON devono finire su git)
+spiegazione.md
+
 # Dati locali / output
 data/
 *.parquet

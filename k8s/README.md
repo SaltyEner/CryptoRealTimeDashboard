@@ -80,6 +80,11 @@ kubectl exec -n crypto deploy/kafka -- \
   --from-beginning --max-messages 5
 ```
 
+> 🪟 **Windows / Git Bash:** prefissa il comando con `MSYS_NO_PATHCONV=1`,
+> altrimenti Git Bash traduce il path `/opt/kafka/...` in un percorso Windows
+> e l'`exec` fallisce. Esempio:
+> `MSYS_NO_PATHCONV=1 kubectl exec -n crypto deploy/kafka -- /opt/kafka/bin/kafka-console-consumer.sh ...`
+
 Se vedi 5 messaggi JSON con `symbol`/`price`, la fetta gira su Kubernetes. ✅
 
 ---

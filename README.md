@@ -201,6 +201,6 @@ python -m venv .venv
 - [x] **Passo 5** — Data lake S3 (MinIO locale, switchabile su AWS)
 - [x] **Passo 6** — Dashboard Streamlit sui dati live
 - [x] **Passo 7** — Durabilità Kafka, producer containerizzato, README finale + avvio one-command
-- [ ] **Passo 8** — (Opzionale) Kubernetes su minikube
+- [x] **Passo 8** — (Opzionale) Kubernetes su minikube — fetta *light*: Producer + Kafka su k8s (vedi [`k8s/`](k8s/README.md))
 </content>
 </invoke>
